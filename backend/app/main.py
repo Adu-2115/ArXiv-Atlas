@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routers import research
+from app.logging_config import configure_logging
+from app.routers import history, research
+
+configure_logging()
 
 settings = get_settings()
 
-app = FastAPI(title="ArXiv Research Agent", version="0.1.0")
+app = FastAPI(title="ArXiv Atlas", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +19,7 @@ app.add_middleware(
 )
 
 app.include_router(research.router)
+app.include_router(history.router)
 
 
 @app.get("/health")

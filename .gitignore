@@ -5,6 +5,12 @@ __pycache__/
 venv/
 *.egg-info/
 
+# App cache
+.cache/
+research_history.db
+data/
+.pytest_cache/
+
 # Env files
 .env
 .env.local
@@ -24,5 +30,3 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
-# App cache
-.cache/

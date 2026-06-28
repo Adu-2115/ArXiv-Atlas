@@ -10,6 +10,8 @@ export interface RankedPaper {
   cross_encoder_score: number;
   llm_relevance_score: number | null;
   llm_justification: string | null;
+  citation_count: number | null;
+  final_score: number | null;
 }
 
 export interface PaperInsights {
@@ -60,19 +62,34 @@ export interface ResearchMap {
   overview: string;
 }
 
+export interface ResearchGaps {
+  underexplored_directions: string[];
+  conflicting_findings: string[];
+  missing_benchmarks: string[];
+  future_work: string[];
+}
+
 export interface PipelineResult {
   topic: string;
   candidates_found: number;
   ranked_papers: RankedPaper[];
   insights: PaperInsights[];
   research_map: ResearchMap;
+  research_gaps: ResearchGaps | null;
+}
+
+export interface HistoryEntry {
+  id: number;
+  topic: string;
+  created_at: number;
 }
 
 export type StageName =
   | "find_papers"
   | "rank_papers"
   | "extract_insights"
-  | "map_research";
+  | "map_research"
+  | "detect_gaps";
 
 export interface StageEvent {
   stage: StageName;
@@ -81,4 +98,5 @@ export interface StageEvent {
   papers?: RankedPaper[];
   insights?: PaperInsights[];
   map?: ResearchMap;
+  gaps?: ResearchGaps;
 }

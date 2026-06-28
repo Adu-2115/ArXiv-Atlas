@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, BarChart3, FileSearch, Network } from "lucide-react";
+import { Search, BarChart3, FileSearch, Network, Telescope } from "lucide-react";
 import { StageName } from "@/types/research";
 
 const STAGES: { key: StageName; label: string; icon: typeof Search }[] = [
@@ -8,6 +8,7 @@ const STAGES: { key: StageName; label: string; icon: typeof Search }[] = [
   { key: "rank_papers", label: "Ranking papers", icon: BarChart3 },
   { key: "extract_insights", label: "Extracting insights", icon: FileSearch },
   { key: "map_research", label: "Mapping research", icon: Network },
+  { key: "detect_gaps", label: "Finding gaps", icon: Telescope },
 ];
 
 export default function StageProgress({

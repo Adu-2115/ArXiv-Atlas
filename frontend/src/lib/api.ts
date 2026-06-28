@@ -1,4 +1,4 @@
-import { StageEvent } from "@/types/research";
+import { HistoryEntry, PipelineResult, StageEvent } from "@/types/research";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -58,4 +58,18 @@ export async function streamResearch(
   } catch (err) {
     onError(err instanceof Error ? err.message : "Unknown streaming error");
   }
+}
+
+/** Fetches the list of past research runs (most recent first). */
+export async function fetchHistory(limit = 20): Promise<HistoryEntry[]> {
+  const response = await fetch(`${API_BASE}/api/history?limit=${limit}`);
+  if (!response.ok) throw new Error(`Failed to load history: ${response.status}`);
+  return response.json();
+}
+
+/** Fetches a single past run's full result by id, to view without re-running the pipeline. */
+export async function fetchHistoryRun(id: number): Promise<PipelineResult> {
+  const response = await fetch(`${API_BASE}/api/history/${id}`);
+  if (!response.ok) throw new Error(`Failed to load run: ${response.status}`);
+  return response.json();
 }

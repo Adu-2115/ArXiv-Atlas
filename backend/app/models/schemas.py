@@ -27,6 +27,8 @@ class RankedPaper(ArxivPaper):
     cross_encoder_score: float
     llm_relevance_score: float | None = None
     llm_justification: str | None = None
+    citation_count: int | None = None
+    final_score: float | None = None  # blended relevance + citations + recency
 
 
 # ---------- Stage 3: extraction ----------
@@ -79,6 +81,15 @@ class ResearchMap(BaseModel):
     overview: str
 
 
+# ---------- Research gap detector ----------
+
+class ResearchGaps(BaseModel):
+    underexplored_directions: list[str] = Field(default_factory=list)
+    conflicting_findings: list[str] = Field(default_factory=list)
+    missing_benchmarks: list[str] = Field(default_factory=list)
+    future_work: list[str] = Field(default_factory=list)
+
+
 # ---------- Full pipeline response ----------
 
 class PipelineResult(BaseModel):
@@ -87,7 +98,16 @@ class PipelineResult(BaseModel):
     ranked_papers: list[RankedPaper]
     insights: list[PaperInsights]
     research_map: ResearchMap
+    research_gaps: ResearchGaps | None = None
 
 
 class TopicRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=300)
+
+
+# ---------- Search history ----------
+
+class HistoryEntry(BaseModel):
+    id: int
+    topic: str
+    created_at: float

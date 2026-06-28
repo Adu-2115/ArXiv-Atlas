@@ -35,7 +35,7 @@ def expand_queries(topic: str) -> list[str]:
         'Return JSON: {"queries": ["query1", "query2", ...]}'
     )
     try:
-        result = chat_json(system, user)
+        result = chat_json(system, user, model=settings.groq_query_expansion_model)
         queries = result.get("queries", [])
         if not queries:
             queries = [topic]

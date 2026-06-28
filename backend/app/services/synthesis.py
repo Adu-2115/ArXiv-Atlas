@@ -55,12 +55,17 @@ def build_research_map(
         '"summary": "1 sentence on this paper\'s contribution", "year": "2023"}],\n'
         '  "edges": [{"source": "<arxiv_id>", "target": "<arxiv_id>", '
         '"relation_type": "builds_on|contradicts|shares_method|shares_dataset|related", '
-        '"label": "short phrase describing the relationship"}],\n'
+        '"label": "specific technical reason for the connection, referencing the actual '
+        'method/dataset/finding involved — not a generic phrase like \'related work\' or '
+        '\'similar topic\'"}],\n'
         '  "open_problems": ["open problem 1", "open problem 2"]\n'
         "}\n\n"
         "Every paper's arxiv_id must appear as exactly one node. Use only "
         "arxiv_ids from the list above in nodes and edges. Aim for 2-5 "
-        "clusters and at least one edge per paper where a real relationship exists."
+        "clusters and at least one edge per paper where a real relationship exists. "
+        "Edge labels must be concrete and specific (e.g. 'both evaluate on the COCO "
+        "benchmark' or 'extends the contrastive pretraining approach with a larger "
+        "batch size'), never vague filler."
     )
 
     paper_ids = sorted(p.arxiv_id for p in papers if p.arxiv_id in insight_by_id)

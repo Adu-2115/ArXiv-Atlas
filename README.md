@@ -1,9 +1,10 @@
 # ArXiv Atlas
 
 An AI research agent that turns a topic into a visual map of its research
-landscape — it searches arXiv, ranks papers by relevance, extracts
-structured insights per paper, and synthesizes the results into an
-interactive graph of clusters, relationships, and open problems.
+landscape — it searches arXiv, ranks papers by relevance (textual +
+citation-based + recency), extracts structured insights from full paper
+text, and synthesizes everything into an interactive graph of clusters,
+relationships, open problems, and research gaps.
 
 ![Topic input](docs/screenshot-input.png)
 
@@ -17,10 +18,11 @@ Most "AI research assistant" demos are a thin wrapper: one prompt, one
 summary. That's fast to build and not very useful — it gives you a
 paragraph, not an understanding of a field. ArXiv Atlas is an attempt at
 something closer to how an actual literature review works: find a wide net
-of candidates, narrow them down with two different relevance signals, pull
-out comparable structured facts per paper, then look across all of them to
-find the actual shape of the field — what approaches exist, how they relate,
-and what's still unsolved.
+of candidates, narrow them down with several different relevance signals,
+pull out comparable structured facts per paper from the actual paper text,
+then look across all of them to find the actual shape of the field — what
+approaches exist, how they relate, what's contested, and what's still
+unsolved.
 
 ## How it works
 
@@ -28,96 +30,143 @@ and what's still unsolved.
 topic
   │
   ▼
-1. Find papers     LLM expands the topic into several arXiv search queries
-                    (arXiv's search is keyword-based, so a single query
-                    misses a lot — expansion improves recall), results
-                    deduplicated into a candidate pool.
+1. Find papers      LLM expands the topic into several arXiv search queries
+                     (arXiv's search is keyword-based, so a single query
+                     misses a lot), results deduplicated into a candidate pool.
   │
   ▼
-2. Rank papers      Local cross-encoder scores topic-vs-abstract relevance
-                    for every candidate (fast, cheap, no API cost) →
-                    shortlist. The shortlist then gets a finer LLM relevance
-                    score (0-100) + a one-line justification.
+2. Rank papers       Local cross-encoder scores topic-vs-abstract relevance for
+                     every candidate → shortlist. LLM scores relevance (0-100)
+                     on that shortlist. Citation counts (Semantic Scholar) and
+                     recency are blended in. MMR diversity reranking then
+                     reorders the list so the final set spans different
+                     sub-approaches instead of one phrasing of the topic.
+                     Papers below a relevance floor are dropped entirely.
   │
   ▼
-3. Extract insights  Each paper is sent to the LLM individually with a fixed
-                    schema: problem, method, key results, datasets,
-                    limitations. Papers that fail extraction are dropped and
-                    backfilled from further down the ranked list — not
-                    retried — so a single bad call never wastes a slot.
+3. Extract insights   Each paper is sent to the LLM with full-text excerpts
+                     pulled from ar5iv (method/results/limitations sections),
+                     falling back to the abstract if that fails. Papers that
+                     fail extraction are dropped and backfilled from further
+                     down the ranked list — never retried.
   │
   ▼
-4. Map research     The structured extractions (not raw papers) are sent to
-                    the LLM, which clusters papers thematically and outputs
-                    a graph: nodes, typed edges (builds_on / contradicts /
-                    shares_method / shares_dataset / related), clusters, and
-                    open problems.
+4. Map research      Structured extractions are sent to the LLM, which clusters
+                     papers thematically and outputs a graph: nodes, typed
+                     edges (builds_on / contradicts / shares_method /
+                     shares_dataset / related) with specific technical
+                     justifications, clusters, and open problems.
   │
   ▼
-interactive D3 force-directed graph + ranked list + insight cards
+5. Find gaps          One more LLM call over the same extractions surfaces
+                     underexplored directions, conflicting findings, missing
+                     benchmarks, and concrete future-work ideas — grounded
+                     only in the papers actually retrieved.
+  │
+  ▼
+interactive D3 graph + ranked list + insight cards + gap analysis
 ```
 
-All four stages stream to the frontend via Server-Sent Events, so the UI
-shows live per-stage progress instead of one long blocking spinner.
+All five stages stream to the frontend via Server-Sent Events, so the UI
+shows live per-stage progress. Every completed run is saved to SQLite, so
+past searches can be reloaded instantly without re-running the pipeline.
 
 ## Design decisions worth noting
 
 - **Two-pass ranking, not one.** A cross-encoder alone is fast but shallow;
-  an LLM alone over 60 candidates is slow and expensive. Running the cheap
-  model first to cut the pool, then the LLM only on the shortlist, gets most
-  of the quality at a fraction of the cost.
+  an LLM alone over dozens of candidates is slow and expensive. Running the
+  cheap model first to cut the pool, then the LLM only on the shortlist,
+  gets most of the quality at a fraction of the cost.
+- **Citation + recency blending, not pure relevance.** Textual relevance
+  alone can rank an obscure-but-similarly-worded paper above a well-cited
+  foundational one. The final score blends LLM relevance, normalized
+  citation count (Semantic Scholar), and recency — configurable weights.
+- **MMR diversity reranking.** Both the cross-encoder and LLM reward
+  similarity to the topic, which can produce a final set that's all
+  near-duplicates of one angle. MMR balances relevance against diversity
+  from already-selected papers.
+- **A relevance floor, not just a target count.** Backfill exists to keep
+  the result set at full size when a paper fails extraction — but it never
+  pads the list with papers the LLM itself scored as irrelevant. A niche
+  topic returning fewer than the target count is more honest than padding
+  with noise.
 - **Skip-and-backfill instead of retry.** If extraction fails on a paper
-  (rate limit, transient error), retrying the same call rarely helps and
-  burns quota. Pulling the next-ranked paper instead keeps the final set at
-  full size without hammering a call that's likely to fail again.
+  (rate limit, transient error), retrying the same call rarely helps.
+  Pulling the next-ranked paper instead keeps the set at full size without
+  hammering a call likely to fail again.
+- **Full-text extraction with a graceful fallback.** ar5iv's HTML rendering
+  is far easier to parse reliably than raw PDF. When it's unavailable or
+  fails to parse, extraction silently falls back to the abstract rather
+  than failing the paper outright.
 - **Caching at every LLM call site.** Query expansion, relevance scoring,
-  extraction, and synthesis are all cached (extraction is cached
-  permanently per `arxiv_id`, since an abstract never changes; the rest are
-  cached per exact input set with a TTL). Re-running the same topic — or a
-  different topic that happens to surface an already-seen paper — costs
+  extraction, synthesis, and gap detection are all cached — extraction
+  permanently per `arxiv_id` (an abstract/paper text doesn't change), the
+  rest per exact input set with a TTL. Re-running the same topic costs
   close to zero extra API calls.
-- **Graceful degradation over hard failure.** If the final synthesis call
-  fails (e.g. quota exhausted), the pipeline doesn't crash — it returns the
-  papers and insights that already succeeded, with an unclustered fallback
-  map and a clear message, instead of an opaque 500 or a dead SSE stream.
+- **Retry where it helps, fail fast where it doesn't.** Semantic Scholar's
+  rate limit clears in seconds, so citation lookups retry with backoff on
+  `429`. Groq's daily token quota takes an hour to reset, so the LLM client
+  doesn't retry blindly — it fails gracefully instead, returning whatever
+  already succeeded rather than crashing the whole run.
+- **Structured JSON logging with per-stage timing**, not print statements —
+  every pipeline stage logs its start, duration, and outcome, which is what
+  actually made several of the bugs above debuggable in the first place.
 
 ## Tech stack
 
-**Backend:** FastAPI, Groq API (`llama-3.3-70b-versatile`) for reranking/
-extraction/synthesis, `sentence-transformers` (`ms-marco-MiniLM-L-6-v2`) for
-local cross-encoder reranking, `arxiv` for search.
+**Backend:** FastAPI (fully async), Groq API (`llama-3.3-70b-versatile` for
+ranking/synthesis/gap-detection, `llama-3.1-8b-instant` for the
+high-volume query-expansion/extraction calls), `sentence-transformers`
+(cross-encoder for reranking, embedding model for MMR), BeautifulSoup
+(ar5iv parsing), Semantic Scholar API (citations), SQLite (search history),
+`arxiv` (search), pytest.
 
-**Frontend:** Next.js, Tailwind CSS, D3.js for the force-directed graph,
-`lucide-react` for icons.
+**Frontend:** Next.js, Tailwind CSS, D3.js (force-directed graph with
+relation-type filters, edge tooltips, click-to-highlight), `lucide-react`.
+
+**Infra:** Docker + docker-compose (CPU-only torch to keep the image size
+sane), structured JSON logging.
 
 ## Project structure
 
 ```
 arxiv-research-agent/
 ├── backend/
-│   └── app/
-│       ├── main.py              # FastAPI entrypoint
-│       ├── config.py            # env-based settings
-│       ├── pipeline.py          # orchestrates all 4 stages
-│       ├── models/schemas.py    # Pydantic models shared across stages
-│       ├── routers/research.py  # /api/research and /api/research/stream
-│       └── services/
-│           ├── groq_client.py   # Groq chat/JSON wrapper
-│           ├── cache.py         # disk-based cache for LLM calls
-│           ├── arxiv_search.py  # stage 1
-│           ├── reranker.py      # stage 2
-│           ├── extraction.py    # stage 3 + skip-and-backfill
-│           └── synthesis.py     # stage 4
+│   ├── app/
+│   │   ├── main.py                  # FastAPI entrypoint + logging setup
+│   │   ├── config.py                # env-based settings (models, weights, thresholds)
+│   │   ├── logging_config.py        # structured JSON logging
+│   │   ├── pipeline.py              # standalone async orchestrator (non-streaming)
+│   │   ├── models/schemas.py        # Pydantic models shared across stages
+│   │   ├── routers/
+│   │   │   ├── research.py          # /api/research and /api/research/stream (SSE)
+│   │   │   └── history.py           # /api/history — past run persistence
+│   │   └── services/
+│   │       ├── groq_client.py       # sync + async Groq wrappers
+│   │       ├── cache.py             # disk-based cache for LLM/API calls
+│   │       ├── arxiv_search.py      # stage 1
+│   │       ├── reranker.py          # stage 2: cross-encoder + LLM + citations + MMR
+│   │       ├── citations.py         # Semantic Scholar lookup, retry-on-429
+│   │       ├── diversity.py         # MMR diversity reranking
+│   │       ├── fulltext.py          # ar5iv HTML parsing for full-text extraction
+│   │       ├── extraction.py        # stage 3: async extraction + skip-and-backfill
+│   │       ├── synthesis.py         # stage 4: graph synthesis
+│   │       ├── gap_detector.py      # stage 5: research gap detection
+│   │       └── history.py           # SQLite search history
+│   ├── tests/                       # pytest — cache, extraction, reranker, citations, history
+│   ├── Dockerfile
+│   └── requirements.txt
 └── frontend/
     └── src/
-        ├── app/page.tsx              # main page, wires stages + UI
+        ├── app/page.tsx              # main page, wires all stages + UI
         ├── components/
-        │   ├── ResearchGraph.tsx     # D3 force-directed graph, filters, highlight-on-click
-        │   ├── StageProgress.tsx     # pipeline progress
-        │   ├── PaperList.tsx / InsightsList.tsx
-        │   └── Skeletons.tsx         # loading states per stage
-        ├── lib/api.ts                # SSE streaming client
-        └── types/research.ts         # TS types mirroring backend schemas
+        │   ├── ResearchGraph.tsx     # D3 graph: relation filters, tooltips, highlight-on-click
+        │   ├── ResearchGaps.tsx      # gap detection display
+        │   ├── HistoryPanel.tsx      # past-search dropdown
+        │   ├── StageProgress.tsx, Skeletons.tsx, JumpNav.tsx, CollapsibleCard.tsx
+        │   └── PaperList.tsx / InsightsList.tsx
+        ├── lib/api.ts                # SSE client + history fetch
+        └── types/research.ts        # TS types mirroring backend schemas
 ```
 
 ## Running locally
@@ -139,27 +188,49 @@ copy .env.local.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. First backend request will be slower than
-usual — the cross-encoder model downloads on first use (~100MB, cached
-after).
+Open `http://localhost:3000`. First backend request is slower than usual —
+the cross-encoder and embedding models download on first use (~150-200MB
+combined, cached after).
+
+**Tests:**
+```bash
+cd backend
+pytest tests/ -v
+```
+
+## Running with Docker
+
+```bash
+cp .env.example .env   # set GROQ_API_KEY at the project root
+docker compose up --build
+```
+
+Open `http://localhost:3000`. The backend image installs CPU-only torch
+explicitly (sentence-transformers otherwise pulls the full CUDA build,
+which is both unnecessary in a container with no GPU and much larger) and
+pre-downloads the cross-encoder/embedding models at build time.
 
 ## Known limitations
 
-- Extraction works on abstracts only, not full paper text — abstracts omit
-  a lot of nuance (exact limitations, precise dataset details).
-- Ranking is purely textual; no citation/impact signal is factored in, so a
-  well-cited foundational paper and an obscure textually-similar one can
-  rank similarly.
-- No persistence — every search re-runs the full pipeline (subject to
-  caching); there's no history of past searches.
-- Groq's free tier has a daily token quota, which a handful of test runs
-  can exhaust.
+- Ranking and extraction quality both depend on Groq's free-tier daily
+  token quota, which a handful of test runs can exhaust (resets after ~1
+  hour).
+- Semantic Scholar's unauthenticated tier has a tight, globally-shared rate
+  limit; citation lookups retry with backoff but can still occasionally
+  return 0 for papers that are recent enough not to be indexed yet.
+- ar5iv full-text parsing depends on the paper having a working ar5iv
+  rendering and a fairly standard section-heading structure; some papers
+  fall back to abstract-only extraction.
+- Single-user/local-first: search history is a local SQLite file, not
+  designed for multi-user or hosted deployment as-is.
 
 ## Roadmap
 
-- Full-text extraction via ar5iv HTML instead of abstract-only.
-- Citation-aware ranking via the Semantic Scholar API.
-- MMR diversity reranking so the final paper set spans sub-approaches
-  instead of clustering around one phrasing of the topic.
-- Persisted research history (SQLite) so past topic searches don't need to
-  re-run the full pipeline.
+- Deploy to a real host (Render/Railway + Vercel) — currently local +
+  Docker only by design.
+- "Chat with the graph" — answer questions like "why are these papers
+  connected?" using the structured extractions already on hand, no RAG
+  needed.
+- Compare two topics side-by-side (shared papers, divergent clusters,
+  common datasets).
+- GitHub Actions CI running the test suite on push.

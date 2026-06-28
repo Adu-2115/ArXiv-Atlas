@@ -2,18 +2,21 @@
 
 import { useMemo, useState } from "react";
 import { Network, AlertTriangle } from "lucide-react";
-import { streamResearch } from "@/lib/api";
+import { streamResearch, fetchHistoryRun } from "@/lib/api";
 import { colorForCluster } from "@/lib/graphTheme";
 import StageProgress from "@/components/StageProgress";
 import PaperList from "@/components/PaperList";
 import InsightsList from "@/components/InsightsList";
 import ResearchGraph from "@/components/ResearchGraph";
+import ResearchGapsView from "@/components/ResearchGaps";
+import HistoryPanel from "@/components/HistoryPanel";
 import JumpNav from "@/components/JumpNav";
 import SectionHeader from "@/components/SectionHeader";
 import { GraphSkeleton, CardListSkeleton } from "@/components/Skeletons";
 import {
   PaperInsights,
   RankedPaper,
+  ResearchGaps,
   ResearchMap,
   StageEvent,
   StageName,
@@ -31,9 +34,8 @@ export default function Home() {
   const [rankedPapers, setRankedPapers] = useState<RankedPaper[]>([]);
   const [insights, setInsights] = useState<PaperInsights[]>([]);
   const [researchMap, setResearchMap] = useState<ResearchMap | null>(null);
+  const [researchGaps, setResearchGaps] = useState<ResearchGaps | null>(null);
 
-  // Maps arxiv_id -> cluster color, so paper/insight cards visually tie back
-  // to the graph's cluster colors.
   const clusterColorByPaper = useMemo(() => {
     if (!researchMap) return {};
     const map: Record<string, string> = {};
@@ -50,14 +52,11 @@ export default function Home() {
     }
     if (rankedPapers.length > 0) sections.push({ id: "ranked-papers", label: "Papers" });
     if (insights.length > 0) sections.push({ id: "insights", label: "Insights" });
+    if (researchGaps) sections.push({ id: "research-gaps", label: "Gaps" });
     return sections;
-  }, [researchMap, rankedPapers, insights]);
+  }, [researchMap, rankedPapers, insights, researchGaps]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!topic.trim() || loading) return;
-
-    setLoading(true);
+  function resetResults() {
     setError(null);
     setCurrentStage(null);
     setCompletedStages(new Set());
@@ -65,6 +64,15 @@ export default function Home() {
     setRankedPapers([]);
     setInsights([]);
     setResearchMap(null);
+    setResearchGaps(null);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!topic.trim() || loading) return;
+
+    setLoading(true);
+    resetResults();
 
     const onStage = (event: StageEvent) => {
       if (event.status === "started") {
@@ -83,6 +91,9 @@ export default function Home() {
         if (event.stage === "map_research" && event.map) {
           setResearchMap(event.map);
         }
+        if (event.stage === "detect_gaps" && event.gaps) {
+          setResearchGaps(event.gaps);
+        }
       }
     };
 
@@ -97,6 +108,27 @@ export default function Home() {
     );
   }
 
+  async function handleSelectHistory(id: number) {
+    setLoading(true);
+    resetResults();
+    try {
+      const result = await fetchHistoryRun(id);
+      setTopic(result.topic);
+      setCandidatesFound(result.candidates_found);
+      setRankedPapers(result.ranked_papers);
+      setInsights(result.insights);
+      setResearchMap(result.research_map);
+      setResearchGaps(result.research_gaps);
+      setCompletedStages(
+        new Set(["find_papers", "rank_papers", "extract_insights", "map_research", "detect_gaps"])
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load past search");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const isLoadingResults =
     loading &&
     (currentStage === "rank_papers" || currentStage === "extract_insights") &&
@@ -105,12 +137,15 @@ export default function Home() {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-8">
-        <h1 className="text-2xl font-bold text-slate-900">ArXiv Research Agent</h1>
-        <p className="mt-1 text-slate-500">
-          Enter a topic. The agent searches arXiv, ranks papers by relevance,
-          extracts key insights, and maps the research landscape.
-        </p>
+      <header className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">ArXiv Atlas</h1>
+          <p className="mt-1 text-slate-500">
+            Enter a topic. The agent searches arXiv, ranks papers by relevance,
+            extracts key insights, and maps the research landscape.
+          </p>
+        </div>
+        <HistoryPanel onSelect={handleSelectHistory} />
       </header>
 
       <form onSubmit={handleSubmit} className="mb-8 flex gap-3">
@@ -149,7 +184,6 @@ export default function Home() {
 
       {jumpSections.length > 1 && <JumpNav sections={jumpSections} />}
 
-      {/* Research landscape (graph) */}
       {isMapping && (
         <section className="mb-10">
           <SectionHeader icon={Network} title="Research Landscape" iconColor="#8b5cf6" />
@@ -176,7 +210,6 @@ export default function Home() {
         </section>
       )}
 
-      {/* Ranked papers */}
       {isLoadingResults && (
         <section className="mb-10">
           <SectionHeader icon={Network} title="Ranked Papers" iconColor="#6366f1" />
@@ -189,7 +222,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Extracted insights */}
       {isLoadingResults && (
         <section className="mb-10">
           <SectionHeader icon={Network} title="Extracted Insights" iconColor="#f59e0b" />
@@ -199,6 +231,12 @@ export default function Home() {
       {insights.length > 0 && (
         <div className="mb-10">
           <InsightsList insights={insights} clusterColorByPaper={clusterColorByPaper} />
+        </div>
+      )}
+
+      {researchGaps && (
+        <div className="mb-10">
+          <ResearchGapsView gaps={researchGaps} />
         </div>
       )}
     </main>
